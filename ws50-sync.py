@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """Retrospective update of Domoticz with Withings data ON DB LEVEL. BE CAREFULL!"""
@@ -8,6 +8,7 @@ import sys
 import time
 import sqlite3
 import requests
+import subprocess
 import re
 import argparse
 from datetime import datetime
@@ -22,7 +23,7 @@ parser.add_argument('-p', '--password', help='password in use with account.withi
 parser.add_argument('-c', '--co2', help='co2 idx', type=int, required=False)
 parser.add_argument('-t', '--temperature', help='temperature idx', type=int, required=False)
 parser.add_argument('-d', '--database', help='fully qualified name of database-file', required=True)
-parser.add_argument('-l', '--length', help='set short log length (defaults to one day)', type=int, choices=xrange(1, 8), default=1, required=False)
+parser.add_argument('-l', '--length', help='set short log length (defaults to one day)', type=int, choices=range(1, 8), default=1, required=False)
 parser.add_argument('-f', '--full', help='update using complete history', action='store_true', required=False)
 parser.add_argument('-r', '--remove', help='clear existing data from database', action='store_true', required=False)
 parser.add_argument('-w', '--warning', help='suppress urllib3 warnings', action='store_true', required=False)
@@ -64,13 +65,13 @@ def init_database(db):
         dbinfo = c.fetchall()
         for row in dbinfo:
             dbversion = row[1]
-        print "[-] Attaching database " + db + " [version " + str(dbversion) + "]"
+        print("[-] Attaching database " + db + " [version " + str(dbversion) + "]")
     else:
         sys.exit("[-] Database not found " + db + "\n")
 
 
 def clear_devices(idx, table):
-    print "[-] Removing existing data from table " + str(table).upper()
+    print("[-] Removing existing data from table " + str(table).upper())
     try:
         c.execute('DELETE FROM ' + str(table) + ' WHERE DeviceRowID = ' + str(idx) + ';')
     except Exception:
@@ -89,7 +90,7 @@ def get_lastupdate(idx, table):
             if lastdate < PDAY:
                 lastdate = PDAY
                 comment = " (" + str(args.length) + " day limit)"
-    print "[-] Downloading all measurements recorded after " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(lastdate)) + comment
+    print("[-] Downloading all measurements recorded after " + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(lastdate)) + comment)
     return lastdate
 
 
@@ -126,14 +127,14 @@ def authenticate_withings(username, password):
         except Exception:
             pem = True
     auth_data = "email=" + str(username) + "&is_admin=&password=" + str(password)
-    print "[-] Authenticating at account.withings.com"
+    print("[-] Authenticating at account.withings.com")
     s.request("HEAD", URL_USAGE, timeout=3, headers=HEADER, allow_redirects=True, verify=pem)
     response = restpost(URL_AUTH, auth_data)
     if 'session_key' in s.cookies.get_dict():
         jar = s.cookies.get_dict()
     else:
         sys.exit("[-] Session key negotiation failed, check username and/or password" + "\n")
-    accountid = re.sub("[^0-9]", "", str(re.search('(?<=accountId)(.*)', response.content)))
+    accountid = re.sub("[^0-9]", "", str(re.search('(?<=accountId)(.*)', str(response.content))))
     payload = "accountid=" + str(accountid) + "&action=getbyaccountid&appliver=c7726fda&appname=my2&apppfm=web&enrich=t&sessionid=" + \
         jar['session_key'] + "&type=-1"
     response = restpost(URL_ASSO, payload)
@@ -162,15 +163,14 @@ def update_meter(name, idx, field, dbtable, dataset, status=None):
                 if not args.quiet:
                     print('[-] INSERT INTO ' + str(dbtable) + '(DeviceRowID,' + str(field) + ',Date) VALUES (' + str(idx) + ',' + str(
                         item2['value']) + ",'" + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item2['date'])) + "'" + ')')
-                    clear_line()
-                c.execute('INSERT INTO ' + str(dbtable) + '(DeviceRowID,' + str(field) + ',Date) VALUES (' + str(idx) + ',' + str(
-                    item2['value']) + ",'" + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(item2['date'])) + "'" + ')')
+                    clear_line()                
                 count += 1
             if count > 0 and status is not None:
-                c.execute('UPDATE DeviceStatus SET ' + str(status) + ' = ' + str(item2['value']) + ' WHERE ID = ' + str(idx))
-                c.execute('UPDATE DeviceStatus SET LastUpdate = ' + "'" + time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(
-                    item2['date'])) + "'" + ' WHERE ID = ' + str(idx))
-            print "[-] Updating " + str(name).upper() + " table with " + str(count) + " measurements" + " [" + str(not args.noaction).upper() + "]"
+                base="http://192.168.0.27/json.htm?type=command&param=udevice&idx=23&nvalue=480".format(str(idx), str(item2['value']))        
+                r = s.get(base)
+                if r.json()["status"] == "ERR":
+                    raise Exception("Error updating Device, return code {}".format(r.json()["status"]))
+            print("[-] Updating " + str(name).upper() + " table with " + str(count) + " measurements" + " [" + str(not args.noaction).upper() + "]")
     except Exception:
         conn.close()
         sys.exit("[-] Meter update failed, exiting" + "\n")
@@ -182,10 +182,10 @@ def full_update(name, type, field, table, idx, dataset):
         c.execute('CREATE TEMPORARY TABLE IF NOT EXISTS WS50SYNC ([DeviceRowID] BIGINT NOT NULL, [Value] BIGINT, [Temperature] FLOAT, [Date] DATETIME);')
         update_meter(str(name), idx, field, "WS50SYNC", dataset)
     except Exception:
-        print "[-] Temporary table update failed, exiting"
+        print( "[-] Temporary table update failed, exiting")
         conn.close()
         sys.exit()
-    print "[-] Calculating daily MIN, MAX & AVG values"
+    print("[-] Calculating daily MIN, MAX & AVG values")
     c.execute('select DeviceRowID, min(' + str(field) + '), max(' + str(field) + '), avg(' + str(
         field) + '), date(date) from WS50SYNC where DeviceRowID=' + str(idx) + ' group by date(date);')
     dbdata = c.fetchall()
@@ -199,7 +199,7 @@ def full_update(name, type, field, table, idx, dataset):
 
 
 def commit_database():
-    print "[-] Committing and closing database"
+    print("[-] Committing and closing database")
     try:
         conn.commit()
     except Exception:
@@ -212,9 +212,9 @@ def commit_database():
 
 def main():
     totalrows = 0
-    print
-    print "Withings WS-50 Syncer Version " + _VERSION_
-    print
+    print()
+    print("Withings WS-50 Syncer Version " + _VERSION_)
+    print()
 
     if not (args.co2 or args.temperature):
         parser.error('argument -c/--co2 and/or -t/--temperature is required')
@@ -223,7 +223,7 @@ def main():
         parser.error('argument -f/--full requires -r/--remove')
 
     if args.noaction:
-        print "[-] Dry run mode enabled, no changes to the database will be made"
+        print("[-] Dry run mode enabled, no changes to the database will be made")
 
     init_database(args.database)
 
@@ -258,10 +258,10 @@ def main():
     if not args.noaction and totalrows > 0:
         commit_database()
     else:
-        print "[-] Nothing to commit, closing database"
+        print("[-] Nothing to commit, closing database")
         conn.close()
 
-    print
+    print()
 
 if __name__ == "__main__":
     main()
